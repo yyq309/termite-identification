@@ -1,0 +1,22 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Local datasets and training outputs are reproducible and can be large.
+data/*
+!data/.gitkeep
+runs/*
+!runs/.gitkeep
+
+# Model artifacts
+*.pt
+*.onnx
+*.engine
+*.torchscript
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
