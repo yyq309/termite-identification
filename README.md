@@ -161,3 +161,74 @@ python src/termite_binary/predict.py \
 服务器完全断网（仅系统 Python 3.8，无 pip/torch）。整套 GPU PyTorch 栈通过在有网机器上下载 cp38/linux/cu121
 的 wheel 包 + 自带的 python-build-standalone 3.8，scp 过去用 `scripts/server_setup.sh` 离线安装。容器 `/dev/shm`
 仅 64MB，故训练用 `--workers 0`；离线环境下 AMP 自检需联网下载模型，故默认 `--amp` 关闭。
+
+---
+
+# 大图小目标白蚁检测 + SAHI 切片
+
+二分类回答"这张图是不是白蚁"，但真实场景里**白蚁往往是大图中的一个小点**（墙面、木梁、地基照片里只占 1–2%），
+整图一次推理容易漏检。这条线做**目标检测 + SAHI 切片推理**（Slicing Aided Hyper Inference）：把大图切成重叠小块分别检测、
+再全局 NMS 合并，专门找回微小白蚁。代码在 `src/termite_detect/`。
+
+## 为什么用合成数据
+
+公开源没有**带检测框**的白蚁数据（二分类那批是整图分类图，无框）。因此用 **copy-paste 合成**造带框数据：
+把**真实白蚁抠图**贴到**真实纹理背景**上，坐标即真值框。蚂蚁作为**未标注干扰物**贴入，逼模型学会区分 look-alike。
+
+```bash
+# 1) 抠图：rembg(U2Net) 把白蚁/蚂蚁分割成干净透明 RGBA（去除 studio 背景光晕）
+python src/termite_detect/make_cutouts.py --src-dir data/raw/termite --out-dir data/cutouts/termite --model u2netp
+# 2) 背景：下载 DTD 表面纹理（木纹/裂纹/墙面/多孔…）
+python src/termite_detect/fetch_backgrounds.py --out data/backgrounds
+# 3) 合成 YOLO 检测集（train/val 小画布，test 用大画布+微小白蚁 = SAHI 目标场景）
+python src/termite_detect/make_synthetic.py \
+  --termite-dir data/cutouts/termite --neg-dir data/cutouts/ant \
+  --bg-dir data/backgrounds --out data/termite_detect
+```
+
+规模：957 白蚁 + 590 蚂蚁抠图，1503 背景 → train 2500 / val 400 / **test 60 张大图（2048–3200px，白蚁仅 22–70px）**。
+
+## 训练（RTX 4090，YOLOv8-detect @768，120 epochs）
+
+```bash
+python src/termite_detect/train_detect.py \
+  --data data/termite_detect/data.yaml --model weights/yolov8m.pt \
+  --epochs 120 --imgsz 768 --batch 24 --device 0 --workers 0 --name termite_detect_m
+```
+
+| 模型 | mAP50 | mAP50-95 | precision | recall |
+|------|------:|---------:|----------:|-------:|
+| yolov8s @768 | 0.780 | 0.517 | 0.716 | 0.788 |
+| **yolov8m @768** | **0.798** | 0.537 | 0.776 | 0.738 |
+
+最终检测器 `models/termite_detect_yolov8m.pt`（best.pt 峰值 mAP50 ≈ 0.80）。
+
+## SAHI 切片 vs 整图（60 张大图，核心证据）
+
+**切片在每个置信度阈值都召回更高，且阈值越高差距越大**——整图把大图缩到 1280 后小白蚁置信度低、一提阈值就漏掉；
+切片让每个目标在近原分辨率下被检测，召回稳。
+
+| conf | 整图 recall/prec | 切片 recall/prec | Δrecall | 少漏白蚁 |
+|-----:|:---------------:|:----------------:|--------:|:-------:|
+| 0.25 | 0.920 / 0.615 | **0.945** / 0.524 | +2.5pp | 35→24 |
+| 0.45 | 0.684 / 0.747 | **0.815** / 0.724 | +13.1pp | 138→81 |
+| 0.55 | 0.540 / 0.787 | **0.737 / 0.799** | +19.7pp | 201→115 |
+
+conf=0.55 时切片在**召回和精度上同时胜出**。虫害排查优先召回 → 切片 @0.25 召回 **0.945**（437 只只漏 24 只）。
+完整四档扫描、训练曲线、demo 可视化见 [`reports/detect/`](reports/detect/)（`detect_eval.md`）。
+
+## 切片推理（自包含，仅需 ultralytics + numpy，无需安装 sahi）
+
+```bash
+python src/termite_detect/sliced_infer.py \
+  --weights models/termite_detect_yolov8m.pt \
+  --source path/to/large_image.jpg --out runs/sliced \
+  --tile 640 --overlap 0.25 --conf 0.3 --device 0
+```
+
+`eval_sliced.py` 在带标注 test 集上量化"切片 vs 整图"的召回/精度，即上表。
+
+## 局限
+
+- 检测器训练于**合成数据**（真实抠图 + 真实纹理背景），指标为**合成 test 集**上的值；迁移到真实照片存在域差，
+  建议用少量真实标注微调。背景用 DTD 纹理，非全部真实栖息场景，可替换以进一步缩小域差。

@@ -1,0 +1,9 @@
+=== SLICED vs FULL eval (test) ===
+
+== test: 60 large images ==
+mode       recall  precision     TP     FP     FN
+full        0.920      0.615    402    252     35
+sliced      0.945      0.524    413    375     24
+=== demo (3 large imgs) ===
+test_00000.jpg: 16 termites detected -> runs/sliced/test_00000_sliced.jpg
+DONE_SAHI
