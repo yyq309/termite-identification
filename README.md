@@ -232,3 +232,28 @@ python src/termite_detect/sliced_infer.py \
 
 - 检测器训练于**合成数据**（真实抠图 + 真实纹理背景），指标为**合成 test 集**上的值；迁移到真实照片存在域差，
   建议用少量真实标注微调。背景用 DTD 纹理，非全部真实栖息场景，可替换以进一步缩小域差。
+
+---
+
+# 部署化增强：误报、时延、真实数据微调
+
+主检测器 `termite_detect_yolov8m.pt` 仍是当前高召回基线；4090 上进一步补了面向机器狗部署的工程化工具：
+
+- `harden_capture.py`：对合成检测数据加入运动模糊、失焦、光照、噪声、JPEG 等退化，模拟机器狗行走采集画面。
+- `bench_latency.py`：实测 1080p 整图和 SAHI 切片推理时延，覆盖 FP32/FP16。
+- `bench_falsealarm.py`：在无白蚁的蚂蚁/其他昆虫负样本和大图空场景上测误报。
+- `temporal_confirm.py`：视频流 K-of-N 时序确认门控，降低单帧误报触发报警的概率。
+- `finetune.py`：接入真实机器狗标注图像后的低学习率微调入口。
+
+轻量化探索里还训练了一版 YOLOv8n hard 模型：在退化增强数据上 120 epochs，val `mAP50 ≈ 0.624`、`mAP50-95 ≈ 0.365`。
+它用于部署时延和鲁棒性探索，不替代当前 YOLOv8m 主模型。详见：
+
+- [`reports/deploy/nano_hard_experiment.md`](reports/deploy/nano_hard_experiment.md)
+- [`reports/deploy/DATA_COLLECTION.md`](reports/deploy/DATA_COLLECTION.md)
+
+复现实验脚本：
+
+```bash
+bash scripts/build_hard_dataset.sh
+bash scripts/eval_nano_hard.sh
+```

@@ -8,6 +8,7 @@ data/*
 !data/.gitkeep
 runs/*
 !runs/.gitkeep
+**/runs/*
 
 # Model artifacts
 *.pt
