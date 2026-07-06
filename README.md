@@ -257,3 +257,33 @@ python src/termite_detect/sliced_infer.py \
 bash scripts/build_hard_dataset.sh
 bash scripts/eval_nano_hard.sh
 ```
+
+---
+
+# 离线持续学习 / 主动学习闭环
+
+目前还没有机器狗时，可以先用普通图片目录模拟机器狗回传照片，跑通“采样 -> 人工复核 -> 增量数据集 -> 离线微调 -> 指标达标后晋级”的闭环。
+代码在 `src/termite_active/`，完整流程见 [`reports/active_learning.md`](reports/active_learning.md)。
+
+```bash
+# 1) 从图片目录收集高价值候选和空场景负样本
+python src/termite_active/collect_candidates.py \
+  --source data/incoming_photos \
+  --detector models/termite_detect_yolov8m.pt \
+  --classifier models/termite_binary_yolov8m.pt \
+  --out active_pool --sahi --save-empty --copy-images
+
+# 2) 人工填写 active_pool/review_queue.csv 的 human_label 后，构建增量数据集
+python src/termite_active/build_incremental_set.py \
+  --base-data data/termite_detect \
+  --review-csv active_pool/review_queue.csv \
+  --out data/termite_detect_incremental
+
+# 3) 离线微调
+python src/termite_active/retrain.py \
+  --weights models/termite_detect_yolov8m.pt \
+  --data data/termite_detect_incremental/data.yaml \
+  --name termite_active_round01
+```
+
+现场不建议让机器狗直接在线改权重；机器狗只负责采集和回传，4090 服务器离线重训，新模型通过召回、精度、误报率和时延门槛后再发布。

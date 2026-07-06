@@ -9,6 +9,8 @@ data/*
 runs/*
 !runs/.gitkeep
 **/runs/*
+active_pool/
+incoming_photos/
 
 # Model artifacts
 *.pt
